@@ -73,7 +73,8 @@ No test contacts a live instance.
 
 - Instances of hundreds of apps. The reference instance today has 37 apps, 112 app-environment pairs
   and 6 projects.
-- 9 views: instances, apps, app detail, history, deployment, builds, pods, log viewer, help.
+- 9 views (instances, apps, app detail, history, deployment, builds, pods, log viewer, help) and
+  3 dialogs (register, container picker, confirm).
 
 ## Constitution Check
 
@@ -82,7 +83,7 @@ No test contacts a live instance.
 | Principle / rule | How this plan complies | Status |
 |---|---|---|
 | **I. Safe by default** | No mutating action exists in this feature. Reads are limited to an allowlist enforced before any request is sent (R3), with a test proving it. `--readonly` exists and is always on for now. The instance name and colour are always in the header. The resource tree is never requested when a deletion is pending (R3). | ✅ |
-| **II. Credentials never leak** | Tokens are held as `secrecy::SecretString` (redacted `Debug`) and resolved per instance (env var → token file → default). There is no CLI flag for tokens. A permission warning fires on `mode & 0o077`. Each `Session` owns a `reqwest::Client` bound to its instance's token and base URL, so a token cannot reach another host. Fixtures are scrubbed, and a deny-list test enforces it (R12). The expiry is decoded from `exp` (R1). | ✅ |
+| **II. Credentials never leak** | Each instance declares `auth`, and only `token_file` exists in this feature. `Credentials` hold a `secrecy::SecretString` (redacted `Debug`). No CLI flag or env var supplies credentials (v1.2.0). A permission warning fires on `mode & 0o077`. Each `Session` owns a `reqwest::Client` bound to its instance's credentials and base URL, so credentials cannot reach another host. Fixtures are scrubbed, and a deny-list test enforces it (R12). The expiry is decoded from `exp` (R1). | ✅ |
 | **III. Responsive UI** | Pure `update` plus async `Cmd`s over `mpsc` (R11). Every view has a `Loadable<T>` state (loading, loaded, empty, error). A panic hook restores the terminal. Log ring buffer capped at 50,000 lines. Switching cancels through `CancellationToken` and filters by epoch. | ✅ |
 | **IV. Keyboard-first** | One key grammar across views (`contracts/keybindings.md`). A footer shows the keys of each view, and `?` opens help. Headless commands are out of scope for this feature (backlog), so there is no `-o json` yet. | ✅ |
 | **V. Isolated, tolerant API layer** | `devtron-api` is its own crate with no `ratatui`/`crossterm` dependency, which Cargo enforces. Models are hand-written with `#[serde(default)]`, and unknown fields are ignored. Every endpoint has a fixture test. No live instance is needed in tests. | ✅ |
@@ -139,16 +140,19 @@ crates/
 └── devtron-tui/
     ├── src/
     │   ├── main.rs                # clap, color-eyre, terminal guard, run loop
-    │   ├── config.rs              # registry load/save (atomic), token resolution
+    │   ├── config.rs              # registry load/save (atomic), AuthConfig
+    │   ├── credentials.rs         # AuthConfig → Credentials (token_file only in 001)
     │   ├── session.rs             # Session {client, cancel, epoch}; switch()
     │   ├── app/                   # state.rs, msg.rs, update.rs, cmd.rs (runner)
     │   ├── views/                 # instances, apps, app_detail, history, deployment,
-    │   │                          # builds, pods, logs, help, register
-    │   ├── widgets/               # header, footer, table, filter_bar, confirm, loadable
+    │   │                          # builds, pods, logs, help
+    │   ├── dialogs/               # register, container_picker, confirm
+    │   ├── widgets/               # header, footer, table, filter_bar, loadable
     │   ├── logbuf.rs              # ring buffer, search index, follow mode
     │   └── theme.rs               # colours, instance colour
     └── tests/
         ├── update.rs              # pure state-transition tests (navigation, filter, epoch)
+        ├── responsiveness.rs      # SC-004: keys handled within 100 ms while requests stall
         ├── switch_race.rs         # SC-011: switch mid-stream / mid-request (wiremock)
         ├── snapshots.rs           # insta snapshots of each view × loading/empty/error
         └── token_never_rendered.rs# SC-006: search all rendered buffers for the token
@@ -163,7 +167,16 @@ crates/
 
 ## Complexity Tracking
 
-> Dependencies outside the constitution's stack list, as the constitution requires.
+> Exceptions to the constitution and dependencies outside its stack list, as its governance
+> requires.
+
+### Exceptions
+
+| Exception | Rule | Why needed | Follow-up |
+|---|---|---|---|
+| The A8 (CD stage logs) fixture is **synthesized**, not recorded | Constitution V: "a scrubbed response recorded from a real instance" | The reference instance has no pre- or post-deployment stages: none in the last 40 runners of 40 deployed environments (R6). A8 is served by the same SSE writer as A11, whose fixture is recorded. | Replace it with a recording once an instance has stages. Tracked in `backlog.md`. The fixture's first line marks it as synthesized. |
+
+### Dependencies
 
 | Addition | Why needed | Simpler alternative rejected because |
 |---|---|---|

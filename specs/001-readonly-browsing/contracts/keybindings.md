@@ -10,10 +10,10 @@ This is the UI contract for FR-018 and FR-019 and for constitution IV. `snapshot
 | `:` | Command bar. `:apps`, `:instances` (alias `:ctx`), `:help`, `:q`. Tab completes. |
 | `/` | Filter the current list, or search in a log view. `Esc` clears it. |
 | `Enter` | Open the selected item |
-| `Esc` | Back (one level up the view stack). In the filter or command bar: cancel. |
+| `Esc` | Back (one level up the view stack). Does nothing on the root view. In the filter bar, command bar or a dialog: cancel. |
 | `?` | Help: all keys, global and for the current view |
 | `r` | Refresh the current view (FR-022) |
-| `q` | Back. Quits when on the root view. |
+| `q` | Quit, from any view (constitution IV). While typing in the filter bar, command bar or a dialog field, `q` is text. |
 | `Ctrl-C` | Quit from anywhere |
 | `j`/`k`, `↓`/`↑`, `PgDn`/`PgUp`, `g`/`G` | Move, page, top, bottom |
 
@@ -24,16 +24,16 @@ This is the UI contract for FR-018 and FR-019 and for constitution IV. `snapshot
 Apps ──Enter──▶ App detail (environments)
 App detail ──h──▶ History(env) ──Enter──▶ Deployment (stages) ──Enter──▶ Log viewer (stage)
 App detail ──b──▶ Builds [pipeline selector if >1] ──Enter──▶ Log viewer (build)
-App detail ──p──▶ Pods(env) ──Enter──▶ [container picker if >1] ──▶ Log viewer (pod)
+App detail ──p──▶ Pods(env) ──Enter──▶ [container picker dialog if >1] ──▶ Log viewer (pod)
 ```
 
-`Esc` goes back through the stack. Going back to Apps keeps its filter and selection (US2, scenario 3).
+`Esc` goes back through the stack. Going back to Apps keeps its filter and selection (US2, scenario 4).
 
 ## View-specific keys (shown in the footer)
 
 | View | Keys |
 |---|---|
-| Instances | `a` register, `d` remove (confirm dialog, default **No**), `Enter` switch |
+| Instances | `a` register (register dialog), `d` remove (confirm dialog, default **No**), `Enter` switch |
 | Apps | none beyond the global keys |
 | App detail | `h` history, `b` builds, `p` pods (all three act on the selected environment, except `b`, which is per app) |
 | Builds | `Tab` next pipeline (when there are several) |

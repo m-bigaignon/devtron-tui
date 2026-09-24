@@ -115,14 +115,26 @@ In the Devtron repos, "UI" means `dashboard` and "backend" means `devtron`. Ever
     `result.status`, fetched concurrently (at most 4 at a time).
   - The tree is skipped when `lastDeployed` is empty ("never deployed", FR-011) or when a deletion
     is pending (R3).
+  - The **latest deployment outcome** comes from A7 (the history endpoint of R6) with `limit=3`.
+    Its newest runners are grouped by `cd_workflow_id`, and the first group's outcome is the
+    latest deployment's. It is shown next to health (FR-010), and shares the same limit of 4
+    concurrent requests.
+  - A 403 on one environment's tree or history marks that cell "not visible with your access".
+    The other rows still load (FR-035).
   - `GET /app/detail/v2` is fetched only when a view needs `namespace` and `deploymentAppType`
     (pods, R9).
 - **Rationale**:
   - `other-env` is what the UI Overview uses. Its `appStatus` is `""` on the reference instance
     (probed), so health has to come from the resource tree (`status: "Healthy"`, probed).
   - The UI only fetches the tree when the pipeline has been triggered (`service.ts:137-142`).
-- **Alternatives considered**: `GET /app/detail/v2` per environment. It has no health and no
-  deploying user, so it adds a call without adding the fields we need.
+- **Why a separate outcome**: health describes the pods that are running now. After a failed
+  rollout the previous version keeps running and stays `Healthy`, so health alone would hide the
+  failure. `other-env` gives `latestCdWorkflowRunnerId` but not its status.
+- **Alternatives considered**:
+  - `GET /app/detail/v2` per environment. It has no health and no deploying user, so it adds a
+    call without adding the fields we need.
+  - `GET /app/cd-pipeline/workflow/status/...` for the outcome. It would add an endpoint to the
+    allowlist, while A7 is already there.
 
 ## R6. Deployment history and pre/post stages (US3)
 
@@ -294,11 +306,15 @@ The Rust 1.90 toolchain meets every MSRV (the highest is ratatui's 1.88).
 
 - **Decision**:
   - The config file is `~/.config/devtron-tui/config.toml` (from `directories`):
-    `last_instance = "<name>"` plus `[instances.<name>]` with `url`, `token_file` (a leading `~` is
-    expanded) and an optional `color`.
+    `last_instance = "<name>"` plus `[instances.<name>]` with `url`, an optional `color` and
+    `auth = { kind = "token_file", path = "…" }` (a leading `~` is expanded; defaults to
+    `~/.devtron-token`).
   - Writes are atomic (temp file, then rename).
-  - Tokens resolve as follows: `DEVTRON_TOKEN` for the active instance only, then its
-    `token_file`, then `~/.devtron-token`.
+  - Credentials come only from the instance's `auth` declaration. No environment variable or flag
+    can supply them (FR-002, constitution v1.2.0 II).
+  - Internally, `AuthConfig` (what the config declares) produces `Credentials` (what the client
+    sends). Only `TokenFile` → `ApiToken` exists in this feature. Adding a keyring or a
+    username/password login later means adding one variant to each, and nothing else changes.
   - The permission warning fires when `mode & 0o077 != 0`.
   - `--readonly` exists from this feature on and is effectively always true, since there are no
     mutating actions yet. It is wired in so later features get it without changing the CLI.
@@ -309,9 +325,14 @@ The Rust 1.90 toolchain meets every MSRV (the highest is ratatui's 1.88).
 
   [instances.work]
   url = "https://devtron.example.com"
-  token_file = "~/.devtron-token"
+  auth = { kind = "token_file", path = "~/.devtron-token" }
   ```
 
 - **Alternatives considered**:
-  - An OS keyring: WSL2 has no reliable secret service, and constitution II requires token files.
+  - An OS keyring now: WSL2 has no reliable secret service, so it would need a file fallback
+    anyway. It is recorded in the backlog as a future `auth` kind.
+  - SQLite for credentials: no safer than a `600` file (still plaintext at rest), and it adds a
+    dependency. Real protection needs encryption, which means a keyring.
+  - A global `DEVTRON_TOKEN` override: with several instances it is ambiguous which one it belongs
+    to. Dropped, per the analysis follow-up (spec Clarifications).
   - YAML: `toml` is the Rust convention for configs you edit by hand.

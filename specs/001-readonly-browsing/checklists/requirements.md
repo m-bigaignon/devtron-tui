@@ -41,6 +41,10 @@
   pass.
 - The readers are DevOps engineers, so domain terms (environment, build, image tag, commit) are
   kept on purpose. No stack, library or endpoint is named.
-- FR-002 names "environment variable or token file" as the credential source. This is a
-  security requirement from constitution Principle II, not an implementation choice.
+- FR-002 names per-instance credentials (a token file in this feature) and rules out env vars and
+  CLI flags. This is a security requirement from constitution II (v1.2.0), not an implementation
+  choice.
+- Iteration 4 (after `/speckit-analyze`): FR-002, FR-010, FR-030, FR-032, SC-004 and SC-007
+  amended; FR-035 added (partial access); US2 scenario 3 added (failed deployment while old pods
+  are healthy). Re-validated, all items pass.
 - Items marked incomplete require spec updates before `/speckit-clarify` or `/speckit-plan`

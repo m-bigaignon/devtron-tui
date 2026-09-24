@@ -21,23 +21,31 @@ so views never see a `""` that means "unknown".
 |---|---|---|
 | `name` | string | Unique within the registry. Pattern `^[a-z0-9][a-z0-9-]{0,31}$`. It is the registry key. |
 | `url` | URL | `https` required (`http` only for `localhost`). The trailing `/` and any `/orchestrator` suffix are stripped when loading. |
-| `token_file` | path | A leading `~` is expanded. The file must exist and be readable. A permission warning fires when `mode & 0o077 != 0` (FR-005). |
+| `auth` | `AuthConfig` | How the instance authenticates (constitution II). In this feature the only variant is `TokenFile { path }`, where `path` defaults to `~/.devtron-token` and a leading `~` is expanded. The file must exist and be readable. A permission warning fires when `mode & 0o077 != 0` (FR-005). Any other `kind` is refused on load. |
 | `color` | optional named or hex colour | Used for the header, and later for confirmation dialogs (constitution I). |
 
 The **Registry** holds `last_instance: Option<name>` and `instances: map<name, InstanceConfig>`.
 
 - Saving writes a temp file, then renames it.
-- Removing an instance never touches its `token_file` (FR-031).
+- Removing an instance never touches its credentials, for example its token file (FR-031).
 
-### Token (runtime only, never persisted by the tool)
+### Credentials (runtime only, never persisted by the tool)
 
-| Field | Source |
-|---|---|
-| `secret` | `SecretString`: `DEVTRON_TOKEN` if this is the active instance, else `token_file`, else `~/.devtron-token` |
-| `expires_at` | JWT payload `exp` (Unix seconds), decoded without verification |
-| `email` | JWT payload `email`, shown in the header as the user |
+`Credentials` is what a `Session`'s client authenticates with. The rest of the code never sees
+which auth kind produced it.
 
-`Token` has no `Display` implementation. Its `Debug` prints `Token(***)`.
+| Variant | Built from | Sent as |
+|---|---|---|
+| `ApiToken { secret: SecretString, claims: TokenClaims }` | `AuthConfig::TokenFile { path }`, read at connect time | header `token: <jwt>` |
+
+Planned variants, not in this feature: `SessionCookie`, from a username/password login, and a
+keyring-backed token. Each one only adds a variant and a builder.
+
+`TokenClaims = { expires_at: Option<Timestamp> (JWT exp, decoded without verification), email: Option<String> (shown in the header as the user) }`.
+
+`Credentials` has no `Display` implementation. Its `Debug` prints `Credentials(***)`. An error
+message that needs the credentials' origin asks for `AuthConfig::describe()` (for example
+"token file ~/.devtron-token"), never for the secret.
 
 ### Session
 
@@ -103,7 +111,8 @@ The list endpoint returns Devtron apps only (`app_type = 0`, research R4).
 | `cluster_id`, `cd_pipeline_id` | `clusterId`, `pipelineId` |
 | `is_prod` | `prod` |
 | `deployed` | `None` when `lastDeployed` is empty, meaning never deployed (FR-011). Otherwise `DeployedBuild`. |
-| `health` | `Loadable<Health>` from `resource-tree.result.status`. Not requested when never deployed or when `deploymentAppDeleteRequest = true`, which shows as `DeletionPending` (R3). |
+| `health` | `Loadable<Health>` from `resource-tree.result.status`. Not requested when never deployed or when `deploymentAppDeleteRequest = true`, which shows as `DeletionPending` (R3). A 403 gives `Failed { cause: Forbidden }` for this row only (FR-035). |
+| `last_deployment` | `Loadable<RunStatus>`: the outcome of the newest Deployment, built from A7 with `limit=3` (the newest runners, grouped by `cd_workflow_id`; the first group wins). Not requested when never deployed. Shown next to `health`, so a failed rollout is visible while the old pods are still healthy (FR-010, US2 scenario 3). |
 
 `DeployedBuild = { image, tag (after last ':'), commit (commits[0], short), deployed_at (lastDeployed),
 deployed_by (lastDeployedBy email), runner_id (latestCdWorkflowRunnerId) }`

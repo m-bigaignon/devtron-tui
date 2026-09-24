@@ -18,7 +18,7 @@ status (R2).
 | A4 | GET | `/app/other-env` | `app-id` | app detail, FR-010/011 | `other-env.json` |
 | A5 | GET | `/app/detail/v2` | `app-id`, `env-id` | namespace and `deploymentAppType` for pods | `detail-v2.json` |
 | A6 | GET | `/app/detail/resource-tree` | `app-id`, `env-id`. **Never sent when `deploymentAppDeleteRequest` is true** (R3). | health, pods, FR-025 | `resource-tree.json` |
-| A7 | GET | `/resource/history/deployment/cd-pipeline/v1` | `filterCriteria=application/devtron-application\|id\|{appId}`, `filterCriteria=environment\|id\|{envId}`, `offset`, `limit` | history, FR-012 | `history.json` |
+| A7 | GET | `/resource/history/deployment/cd-pipeline/v1` | `filterCriteria=application/devtron-application\|id\|{appId}`, `filterCriteria=environment\|id\|{envId}`, `offset`, `limit` | history (FR-012), and latest deployment outcome per environment with `limit=3` (FR-010) | `history.json` |
 | A8 | GET | `/app/cd-pipeline/workflow/logs/{appId}/{envId}/{pipelineId}/{wfrId}` | `followLogs` (bool). SSE. | stage logs, FR-024 | `cd-stage-logs.sse` (synthesized, R6) |
 | A9 | GET | `/app/{appId}/ci-pipeline/min` | none | builds view pipeline selector | `ci-min.json` |
 | A10 | GET | `/app/ci-pipeline/{pipelineId}/workflows` | `offset`, `size` (both required) | builds, FR-013 | `ci-workflows.json` |
@@ -57,11 +57,11 @@ A non-200 status is always fatal for the stream, even if bytes follow (R8).
 | Observation | `ApiError` | Shown to user as |
 |---|---|---|
 | DNS, TLS or connection failure, or timeout | `Unreachable` | "cannot reach {instance}: {reason}" (retryable) |
-| 401 and the token's local `exp` is in the past | `Expired { at }` | "token for {instance} expired on {date}; replace {token_file}" |
-| 401 otherwise | `Unauthorized` | "token for {instance} was rejected" |
-| 403 | `Forbidden` | "this token cannot see {what}" (the view shows what it can) |
+| 401 and the credentials' local expiry (the token's `exp`) is in the past | `Expired { at }` | "credentials for {instance} expired on {date}", plus a fix hint from the auth kind (token file: "replace {path}") |
+| 401 otherwise | `Unauthorized` | "credentials for {instance} were rejected" |
+| 403 | `Forbidden` | "not visible with your access". A 403 on one row or sub-request marks only that part, and the rest of the view renders (FR-035). |
 | 404 | `NotFound` | "not found", for example an app deleted since the list loaded (retryable) |
 | other ≥ 400 | `Server { status, message }` | the message from R2 (retryable) |
 | JSON that fails to parse | `Decode { endpoint }` | "unexpected response from {endpoint}". Only a malformed envelope can cause this, since fields are tolerant. |
 
-Messages never include the token, request headers, or the full request URL with its query string.
+Messages never include credentials, request headers, or the full request URL with its query string.

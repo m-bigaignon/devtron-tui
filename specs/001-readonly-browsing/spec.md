@@ -6,10 +6,11 @@
 
 **Status**: Draft
 
-**Input**: User description: "First version of a keyboard-driven terminal interface (in the style of
-k9s / lazygit) for our Devtron instance, strictly read-only: list applications, open an application
-to see its environments and what is deployed where, browse deployment history, and follow CI builds
-with their live logs."
+**Input**: First version of a keyboard-driven terminal interface, in the style of k9s and lazygit,
+for one or more registered Devtron instances, one active at a time. It is strictly read-only. The user
+can list applications, see what is deployed in each environment and whether it is healthy, browse
+deployment history with its pre/post stages, follow CI builds, and follow live logs from builds,
+deployment stages and pods.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -49,8 +50,10 @@ and environments.
 ### User Story 2 - See what is deployed where for one application (Priority: P2)
 
 From the list, the engineer opens an application. They see one row per environment showing the
-deployment status (for example healthy, progressing, degraded, failed), which build is deployed
-(image tag and source commit), when it was deployed and by whom. They go back to the list with one
+the health of what is running (for example healthy, progressing, degraded), the outcome of the
+latest deployment (for example succeeded, failed, in progress), which build is deployed (image tag
+and source commit), when it was deployed and by whom. A failed latest deployment is visible even
+while the previous version's pods are still healthy. They go back to the list with one
 key and open another application.
 
 **Why this priority**: "What version is running in production right now, and is it healthy?" is the
@@ -62,12 +65,16 @@ deployed build, time and author with what the Devtron web interface shows.
 **Acceptance Scenarios**:
 
 1. **Given** the application list, **When** the user opens an application, **Then** every environment it
-   is configured for is listed with status, deployed build, deployment time and deploying user.
+   is configured for is listed with health, latest deployment outcome, deployed build, deployment
+   time and deploying user.
 2. **Given** an environment where the application has never been deployed, **When** the detail view is
    shown, **Then** that environment is listed and clearly marked as never deployed.
-3. **Given** the detail view is open, **When** the user presses the "back" key, **Then** they return to the
+3. **Given** an environment whose latest deployment failed while the previous version still runs,
+   **When** the detail view is shown, **Then** the row shows the running version as healthy and the
+   latest deployment as failed.
+4. **Given** the detail view is open, **When** the user presses the "back" key, **Then** they return to the
    application list with their previous filter and selection kept.
-4. **Given** the detail view is open, **When** the user asks for a refresh, **Then** statuses are reloaded
+5. **Given** the detail view is open, **When** the user asks for a refresh, **Then** statuses are reloaded
    without leaving the view.
 
 ---
@@ -163,8 +170,8 @@ them.
 ### User Story 6 - Register and switch between Devtron instances (Priority: P6)
 
 The engineer works with more than one Devtron instance (for example `staging` and `prod`). From
-inside the tool they register another instance with a name, an address, the token file to use for
-it and an optional colour. They open the instance list, which shows each instance's name, address
+inside the tool they register another instance with a name, an address, its credentials (in this
+feature, the token file to use for it) and an optional colour. They open the instance list, which shows each instance's name, address
 and token expiry, and switch to another one. Every view then shows only data from the new instance,
 and the header shows its name in its colour, so they always know which instance they are looking at.
 They can also start the tool directly on a given instance.
@@ -200,17 +207,22 @@ instance remains visible.
 
 - The instance is unreachable or very slow: the interface stays usable, shows a loading state,
   then an error the user can retry. It never freezes or shows a blank screen.
-- The token is valid but lacks permission for part of the data: views show what is allowed and
-  state that the rest is not visible with this token.
-- The instance has hundreds of applications or environments: listing and filtering stay smooth.
+- The user's access is valid but does not cover part of the data (a whole view, or single rows
+  inside a view): the tool shows everything that is allowed, and marks each part that is not as
+  "not visible with your access", without failing the rest of the view. This does not depend on
+  how the user authenticates.
+- The instance has hundreds of applications or environments: each filter keystroke still updates
+  the list without visible delay (see SC-004).
 - An application has no environments configured: the detail view says so explicitly.
 - A build log is very large (hundreds of thousands of lines): the tool keeps working, possibly
   dropping the oldest lines from memory, and says that it did.
 - The terminal is resized, or is too small to display a view: the layout adapts, or a clear
   "terminal too small" message is shown.
-- The instance returns data with fields missing or unexpected: affected cells are shown as
-  unknown, and the rest of the view still loads.
-- The tool is interrupted or crashes: the terminal is always returned to a usable state.
+- The instance returns data with fields missing or unexpected: affected cells are shown as `—`,
+  and the rest of the view still loads.
+- The tool is interrupted (Ctrl-C), asked to stop (termination or hang-up signal, including closing
+  the terminal window), or crashes: the terminal is returned to a usable state. A forced kill cannot
+  be intercepted by any program and is excluded.
 - The user switches instance while a request or live log is in progress on the current one: that
   work is abandoned, and its results never appear once the switch is done.
 - The last-used instance was removed, or is unreachable at launch: the tool opens the instance list
@@ -226,10 +238,10 @@ instance remains visible.
 
 - **FR-001**: When no instance is registered, the tool MUST ask for a name and an address and save the
   instance in the user's configuration. From then on it MUST connect without asking.
-- **FR-002**: The tool MUST read each instance's API token only from a token file set for that instance
-  (by default the single token file in the user's home directory), or from an environment variable
-  that applies to the active instance only. It MUST NOT accept a token as a command-line argument.
-  Tokens MUST NOT be stored in the configuration.
+- **FR-002**: Each instance MUST use its own credentials, declared per instance. In this feature the only
+  supported kind is an API token read from a token file set for that instance (by default the single
+  token file in the user's home directory). The tool MUST NOT accept credentials as a command-line
+  argument or from an environment variable, and MUST NOT store them in the configuration.
 - **FR-003**: The tool MUST check the token and connection at startup and on every instance switch,
   and report the cause of any failure separately: unreachable instance, invalid token, expired token
   (with the expiry date), insufficient permissions.
@@ -238,12 +250,12 @@ instance remains visible.
 
 **Instances (US1, US6)**
 
-- **FR-030**: Users MUST be able to register several instances, each with a unique name, an address, a
-  token file and an optional colour. Registering MUST be possible from inside the tool.
+- **FR-030**: Users MUST be able to register several instances, each with a unique name, an address,
+  its credentials (a token file in this feature) and an optional colour. Registering MUST be possible from inside the tool.
 - **FR-031**: Users MUST be able to remove a registered instance after confirming. Removing it MUST NOT
   touch its token file, and MUST NOT change anything on the Devtron instance.
-- **FR-032**: The tool MUST list registered instances with name, address and token status (valid until
-  a date, expired, or unreadable), and let the user switch to any of them.
+- **FR-032**: The tool MUST list registered instances with name, address and credential status (valid
+  until a date, expired, or unreadable), and let the user switch to any of them.
 - **FR-033**: Only one instance MUST be active at a time. Switching MUST stop all requests and log
   streams of the previous instance, and MUST discard its data. After a switch, no view may show data
   that came from another instance.
@@ -267,9 +279,13 @@ instance remains visible.
 
 **Application detail (US2)**
 
-- **FR-010**: For a selected application, the tool MUST list each configured environment with
-  deployment status, deployed build (image tag and source commit), deployment time and deploying user.
+- **FR-010**: For a selected application, the tool MUST list each configured environment with the
+  health of what is running, the outcome of the latest deployment, the deployed build (image tag and
+  source commit), deployment time and deploying user.
 - **FR-011**: Environments where the application was never deployed MUST be listed and marked as such.
+- **FR-035**: When the user's access covers only part of a view, the tool MUST show what is allowed
+  and mark each part that is not as "not visible with your access", row by row where the data comes
+  row by row, without turning the whole view into an error.
 
 **Deployment history (US3)**
 
@@ -320,8 +336,9 @@ instance remains visible.
 
 ### Key Entities
 
-- **Instance**: a Devtron deployment registered in the tool. It has a unique name, an address, a
-  token file, an optional colour and, for the current user, a token with an expiry date. Exactly one
+- **Instance**: a Devtron deployment registered in the tool. It has a unique name, an address, a way
+  to authenticate with its own credentials (a token file in this feature), an optional colour and,
+  for the current user, credentials that may have an expiry date. Exactly one
   instance is active at a time.
 - **Project**: a grouping of applications within Devtron.
 - **Application**: a deployable unit. It belongs to one project and is configured for one or more
@@ -352,8 +369,8 @@ instance remains visible.
   within 2 seconds of appearing in the Devtron web interface.
 - **SC-009**: During an incident, a user can go from launch to the live logs of a production pod of a
   given application in under 15 seconds, using only the keyboard.
-- **SC-004**: When the instance is slow or unreachable, a keypress (navigation, back, quit) still takes
-  visible effect immediately. The interface never appears frozen.
+- **SC-004**: When the instance is slow or unreachable, a keypress (navigation, back, quit) takes
+  visible effect within 100 ms. The interface never appears frozen.
 - **SC-005**: Across the full test suite and a week of daily use, zero requests that change state are
   sent to any Devtron instance.
 - **SC-010**: A user with two registered instances can switch from one to the other and see the new
@@ -362,8 +379,9 @@ instance remains visible.
   no data from the previous instance appears after the switch.
 - **SC-006**: The token is never visible in any screen, message, log or crash output produced by the
   tool, checked by searching all captured output for the token value.
-- **SC-007**: For 100% of exits (normal, error, interrupt, crash), the terminal is left usable without
-  running `reset`.
+- **SC-007**: For 100% of exits that a program can intercept (normal quit, fatal error, Ctrl-C,
+  termination and hang-up signals, crash), the terminal is left usable without running `reset`.
+  A forced kill (SIGKILL) is excluded.
 - **SC-008**: Every connection failure (unreachable, invalid token, expired token, missing permission)
   produces a message that names the cause, so the user knows what to fix without further investigation.
 
@@ -406,3 +424,14 @@ instance remains visible.
 - Q: Can the tool work with several Devtron instances? → A: Yes, by switching (k9s-context style), one
   active at a time. Aggregated views across instances are not planned. Added User Story 6, FR-030 to
   FR-034, SC-010 and SC-011, and amended FR-001, FR-002 and FR-004.
+
+### Session 2026-09-24 (analysis follow-up)
+
+- Q: Should an environment variable be able to supply the token? → A: No. Credentials are declared
+  per instance only (FR-002, constitution v1.2.0 II).
+- Q: How are credentials stored? → A: Each instance declares a way to authenticate. Only token files
+  exist in this feature. An OS keyring and username/password login are future features (see
+  `backlog.md`).
+- Q: How is a failed deployment shown when the old pods are still healthy? → A: The row shows health
+  and the latest deployment outcome separately (FR-010, US2 scenario 3).
+- Q: How is partial access shown? → A: Part by part, whatever the authentication (FR-035).

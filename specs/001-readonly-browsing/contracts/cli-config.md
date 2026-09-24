@@ -27,21 +27,27 @@ last_instance = "work"            # written on each successful switch
 
 [instances.work]
 url = "https://devtron.example.com" # a trailing "/" or "/orchestrator" is accepted and stripped
-token_file = "~/.devtron-token"   # "~" is expanded
 color = "red"                     # optional: a named colour or "#rrggbb"
+auth = { kind = "token_file", path = "~/.devtron-token" }   # "~" is expanded
 ```
 
+`auth` declares how this instance authenticates (constitution II).
+
+- In this feature the only `kind` is `token_file`, whose `path` defaults to `~/.devtron-token`.
+  When `auth` is absent, that default is used.
+- Any other `kind` is refused on load with "auth kind '{kind}' is not supported by this version".
+- Future kinds (an OS keyring, a username/password login) are backlog items. They will add their
+  own fields under `auth`, and nothing else in the file changes.
+
 - Unknown keys are kept when the tool rewrites the file.
-- The file never contains a token. On load, the tool refuses any key named `token` and says why.
+- The file never contains credentials. On load, the tool refuses any key named `token`, `password`
+  or `secret`, at any depth, and says why.
 
-## Token resolution for the active instance
+## Credentials for an instance
 
-1. `DEVTRON_TOKEN`, only for the instance chosen at launch (`--instance`, or `last_instance`).
-   After a switch it no longer applies, and the new instance uses its own file.
-2. The instance's `token_file`.
-3. `~/.devtron-token`, when `token_file` is not set.
-
-Checks, in order:
+Credentials come only from the instance's `auth` declaration. No environment variable and no
+command-line flag can supply or override them (FR-002). For `kind = "token_file"`, the checks run
+in this order:
 
 - The file exists and is readable, else "cannot read token file {path}".
 - Permissions, with a warning when `mode & 0o077 != 0` (FR-005).
@@ -51,12 +57,12 @@ Checks, in order:
 
 ## First launch (FR-001)
 
-With no config file, or an empty `instances` table, the **Register** form opens. It asks for:
+With no config file, or an empty `instances` table, the **register dialog** opens. It asks for:
 
 - name
 - URL
-- token file (pre-filled with `~/.devtron-token`)
+- credentials: the token file path (pre-filled with `~/.devtron-token`)
 - colour (optional)
 
-The form checks the connection before saving. The first registered instance becomes
+The dialog checks the connection before saving. The first registered instance becomes
 `last_instance`.

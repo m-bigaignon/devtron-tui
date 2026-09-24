@@ -22,20 +22,24 @@ Rationale: k9s-style speed is only acceptable if a mistaken keypress cannot rede
 
 ### II. Credentials Never Leak (NON-NEGOTIABLE)
 
-- Each registered instance MUST have its own token file (default `~/.devtron-token`).
-  `DEVTRON_TOKEN` MAY override the token of the active instance only, and MUST NOT be sent to any
-  other instance. A token MUST NOT be accepted as a command-line argument, which would leak
-  through shell history and process listings, and MUST NOT be stored in the configuration file.
-- A token MUST only ever be sent to the instance it belongs to.
-- The tool MUST warn when the token file is readable by group or others.
-- The token MUST NOT appear in logs, error messages, panic output, `Debug` output, the screen
-  or test fixtures. Types holding it MUST redact it in their `Debug` implementation.
-- Recorded API fixtures MUST be scrubbed of tokens, emails and internal hostnames before
+- Each registered instance MUST declare how it authenticates (its `auth` kind in the
+  configuration) and MUST have credentials of its own. The only kind currently allowed is
+  `token_file`: a file holding the API token (default `~/.devtron-token`). Adding a kind, such as
+  an OS keyring or a username/password login, requires its own spec, and the new kind MUST satisfy
+  every rule in this principle.
+- Credentials MUST NOT be accepted as command-line arguments, which would leak through shell
+  history and process listings. They MUST NOT be stored in the configuration file. They MUST NOT
+  come from an environment variable, unless that variable is scoped to one named instance.
+- Credentials MUST only ever be sent to the instance they belong to.
+- For file-based kinds, the tool MUST warn when the file is readable by group or others.
+- Credentials MUST NOT appear in logs, error messages, panic output, `Debug` output, the screen
+  or test fixtures. Types holding them MUST redact them in their `Debug` implementation.
+- Recorded API fixtures MUST be scrubbed of credentials, emails and internal hostnames before
   they are committed.
-- The tool MUST decode the token's `exp` claim, show the expiry, and report an expired token
-  explicitly rather than as a generic 401.
+- When credentials carry an expiry (such as a token's `exp` claim), the tool MUST show it and
+  report expired credentials explicitly, not as a generic 401.
 
-Rationale: an API token for a CI/CD platform effectively has deploy rights over every
+Rationale: credentials for a CI/CD platform effectively carry deploy rights over every
 connected cluster.
 
 ### III. Responsive, Never-Blocking UI
@@ -88,8 +92,8 @@ returns. Real fixtures catch that drift. Strict parsing would turn it into outag
 - Adding a runtime dependency outside this list MUST be justified in the feature's plan.
 - Target platform: Linux x86_64, including WSL2. Other platforms are welcome but not required.
 - Delivery: a single binary. Configuration lives at `~/.config/devtron-tui/config.toml`: a registry
-  of named instances (address, token file path, colour) and preferences. Secrets never go in
-  that file (Principle II). Views combining several instances at once are out of scope.
+  of named instances (address, `auth` kind and its reference, such as a token file path, and
+  colour) and preferences. Secrets never go in that file (Principle II). Views combining several instances at once are out of scope.
 - Devtron is reached only through its HTTP API (`/orchestrator/...`). The tool MUST NOT
   require kubectl access or direct cluster credentials.
 
@@ -121,4 +125,4 @@ the two conflict, the constitution wins until it is amended.
   exception MUST be written into the plan's Complexity Tracking with its justification.
   An undocumented exception is a defect.
 
-**Version**: 1.1.0 | **Ratified**: 2026-09-24 | **Last Amended**: 2026-09-24
+**Version**: 1.2.0 | **Ratified**: 2026-09-24 | **Last Amended**: 2026-09-24

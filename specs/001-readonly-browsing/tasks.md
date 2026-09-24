@@ -87,22 +87,28 @@ US4 and US5, so it is built here to keep those stories independent of each other
 
 ### API core (`crates/devtron-api`)
 
-- [ ] T006 [P] Implement `crates/devtron-api/src/auth.rs`:
-  - `SecretToken` wrapping `secrecy::SecretString`. `Debug` prints `Token(***)`, and there is no
-    `Display`.
+- [ ] T006 [P] Implement `crates/devtron-api/src/auth.rs` (data-model "Credentials"):
+  - `Credentials` enum with one variant in this feature:
+    `ApiToken { secret: secrecy::SecretString, claims: TokenClaims }`. `Debug` prints
+    `Credentials(***)`, and there is no `Display`.
+  - `fn apply(&self, headers: &mut HeaderMap)` sets the header for the variant (`token`, marked
+    `set_sensitive(true)`). Future variants such as `SessionCookie` add a match arm here and nothing
+    else.
   - `TokenClaims { expires_at: Option<jiff::Timestamp>, email: Option<String> }`, decoded from the
     JWT payload (second segment, base64 URL-safe without padding) with no signature check. A
     non-JWT token gives `None` fields (R1).
   - `fn is_readable_by_others(mode: u32) -> bool` returns `mode & 0o077 != 0` (FR-005).
   - Unit tests in the same file: `Debug` output, a fixed JWT's `exp` and `email`, a non-JWT token,
-    mode `0o600` vs `0o644`.
+    mode `0o600` vs `0o644`, and that `apply` marks the header sensitive.
 - [ ] T007 [P] Implement `crates/devtron-api/src/error.rs`, the `ApiError` enum from the
   classification table in `contracts/devtron-api.md`:
   - variants: `Unreachable { reason }`, `Expired { at }`, `Unauthorized`, `Forbidden { message }`,
     `NotFound`, `Server { status, message }`, `Decode { endpoint }`, `NotAllowed { method, path }`,
     `DeletionPending`
   - `fn retryable(&self) -> bool`
-  - `Display` messages MUST NOT contain the token, headers, or the query string.
+  - `Display` messages MUST NOT contain credentials, headers, or the query string. They say
+    "credentials", not "token". A fix hint that depends on the auth kind (for example "replace
+    {path}") is added by the caller from `AuthConfig::describe()`.
 - [ ] T008 [P] Implement `crates/devtron-api/src/envelope.rs` (R2):
   - `Envelope<T> { code: Option<u16>, status: Option<String>, result: Option<T>, errors: Vec<WireError> }`
   - `WireError.userMessage` is a `serde_json::Value` (string or object).
@@ -119,11 +125,11 @@ US4 and US5, so it is built here to keep those stories independent of each other
   - Unit tests: every row matches its sample path; `POST` is allowed only for `/app/list`;
     `DELETE /app/list`, `PUT /team` and `/app/unknown` are refused.
 - [ ] T010 Implement `crates/devtron-api/src/client.rs` (R1–R3). Depends on T006–T009.
-  - `Client::new(base_url, SecretToken) -> Result<Client>`:
+  - `Client::new(base_url, Credentials) -> Result<Client>`:
     - strips a trailing `/` and a trailing `/orchestrator`
     - requires `https`, except for `localhost` and `127.0.0.1`
-    - builds its own `reqwest::Client` with 20 s timeout and a default `token` header marked
-      `set_sensitive(true)`
+    - builds its own `reqwest::Client` with 20 s timeout, and default headers from
+      `Credentials::apply`
     - one `Client` per instance, never shared (constitution II)
   - A private `async fn send<T>(&self, method, path, query, body) -> Result<T, ApiError>`:
     - checks the allowlist before sending
@@ -133,7 +139,7 @@ US4 and US5, so it is built here to keep those stories independent of each other
       `envelope::error_message`
   - The public `async fn check_roles() -> Result<Roles>` (A1) returns
     `Roles { roles: Vec<String>, super_admin: bool }`.
-  - Re-export `Client`, `ApiError` and `SecretToken` from `lib.rs`.
+  - Re-export `Client`, `ApiError`, `Credentials` and `TokenClaims` from `lib.rs`.
 - [ ] T011 [P] Implement `crates/devtron-api/src/logs/sse.rs` and
   `crates/devtron-api/src/logs/stage_info.rs` (R8):
   - `LogEvent = Line { id, text } | Stage(StageInfo) | End | Reconnecting { attempt } | Error(String) | Closed`
@@ -181,7 +187,7 @@ US4 and US5, so it is built here to keep those stories independent of each other
   - any line of `fixtures-raw/denylist.txt`, matched case-insensitively and only when that file
     exists
 - [ ] T015 [P] Write `crates/devtron-api/tests/errors.rs` with wiremock. Each case yields the right
-  `ApiError`, and its `Display` never contains the token (FR-003, SC-008):
+  `ApiError`, and its `Display` never contains the credentials (FR-003, SC-008):
   - unreachable (a closed local port)
   - 401 with a non-expired token → `Unauthorized`
   - 401 with an expired `exp` → `Expired`
@@ -198,6 +204,9 @@ US4 and US5, so it is built here to keep those stories independent of each other
     and no missing line
   - after 3 failed reconnects → `Error`
   - a 403 JSON response → `Error` with its message
+  - latency (SC-003): a small `tokio::net::TcpListener` server (wiremock can't send a body
+    incrementally) writes one SSE frame, waits 500 ms, then writes a second. The second
+    `LogEvent::Line` must be received within 100 ms of being written.
 - [ ] T017 Create the allowlist harness `crates/devtron-api/tests/allowlist.rs`:
   - a wiremock server that records every request, plus a helper `assert_all_allowlisted(&server)`
     that checks each received (method, path) against `allowlist::check`
@@ -217,18 +226,25 @@ US4 and US5, so it is built here to keep those stories independent of each other
   - `name` must match `^[a-z0-9][a-z0-9-]{0,31}$`.
   - `url`: "`https` required (`http` only for `localhost`)"; a trailing `/` and `/orchestrator`
     are stripped.
-  - `token_file`: a leading `~` is expanded.
+  - `auth`: `AuthConfig::TokenFile { path }` from `auth = { kind = "token_file", path = "…" }`.
+    `path` defaults to `~/.devtron-token` when `auth` is absent, and a leading `~` is expanded.
+    Any other `kind` is refused with "auth kind '{kind}' is not supported by this version".
+    `AuthConfig::describe()` returns for example "token file ~/.devtron-token" for messages.
   - `color`: a named colour or `#rrggbb`.
-  - A key named `token` anywhere is refused, with a message saying why.
+  - A key named `token`, `password` or `secret`, at any depth, is refused with a message saying
+    why (the file never holds credentials).
   - Unknown keys are preserved on save (keep a `toml::Table` alongside the typed view).
   - Saving is atomic (write `config.toml.tmp`, then rename).
   - Unit tests for each rule.
-- [ ] T020 [P] Implement `crates/devtron-tui/src/credentials.rs` (cli-config.md, token resolution):
-  - `fn resolve(instance, is_launch_instance, env) -> Result<ResolvedToken>` uses `DEVTRON_TOKEN`
-    only when `is_launch_instance`, else `token_file`, else `~/.devtron-token`.
-  - `ResolvedToken { token: SecretToken, claims: TokenClaims, source_path: Option<PathBuf>, perm_warning: bool }`
+- [ ] T020 [P] Implement `crates/devtron-tui/src/credentials.rs` (cli-config.md, "Credentials for an
+  instance"):
+  - `fn load(auth: &AuthConfig) -> Result<Loaded>`, where
+    `Loaded { credentials: Credentials, perm_warning: Option<PathBuf> }`. For `TokenFile`, read the
+    file, trim it, and decode the claims.
+  - **No environment variable is read** (FR-002, constitution v1.2.0 II).
   - Errors: "cannot read token file {path}".
-  - Unit tests: the env var is ignored after a switch; the permission warning fires on `0o644`.
+  - Unit tests: the permission warning fires on `0o644` and not on `0o600`; setting
+    `DEVTRON_TOKEN` in the test environment changes nothing.
 - [ ] T021 Implement the message loop in `crates/devtron-tui/src/app/` (R11):
   - `state.rs`: `State` with a view stack, `Session` summary and `Loadable<T>` =
     `Loading | Loaded(T) | Empty | Failed { cause, retryable }`, plus a `stale: bool` for refreshes
@@ -249,7 +265,13 @@ US4 and US5, so it is built here to keep those stories independent of each other
   - Install `color-eyre` and a panic hook that restores the terminal (raw mode off, alternate
     screen left, cursor shown) before the report prints. A `Drop` guard does the same on every
     return path.
-  - Main loop: `tokio::select!` over crossterm `EventStream`, the `mpsc` receiver and a 250 ms tick.
+  - Main loop: `tokio::select!` over crossterm `EventStream`, the `mpsc` receiver, a 250 ms tick,
+    and `tokio::signal::unix` streams for SIGTERM and SIGHUP. Each signal leaves the loop the same
+    way as a normal quit, so the terminal is restored (SC-007). Ctrl-C arrives as a key event in
+    raw mode. SIGKILL cannot be caught and is out of scope.
+  - The loop is a function
+    `run(events: impl Stream<Item = Event>, backend: impl Backend, …) -> Result<()>` that `main`
+    calls with the real crossterm stream and backend, so tests can drive it (T028).
   - Exit codes: 0 quit, 1 fatal, 2 usage.
 
   Depends on T021.
@@ -259,16 +281,19 @@ US4 and US5, so it is built here to keep those stories independent of each other
     expired or under 7 days) · breadcrumb · `READ-ONLY` badge
   - `footer.rs`: the view's keys, then `? help`
   - `loadable.rs`: a spinner with what is loading, an explicit empty sentence, an error with the
-    cause and `r to retry`
+    cause and `r to retry`. `Failed { cause: Forbidden }` renders as "not visible with your
+    access", with no retry hint. The same renderer works for one table cell, so a single row can be
+    forbidden while the rest of the view loads (FR-035).
   - `too_small.rs`: below 80×24, show "terminal too small, 80×24 needed"
   - `table.rs`: a selectable table with a `/` filter bar, case-insensitive, updated on each
-    keystroke
-  - `confirm.rs`: a yes/no dialog whose default is **No**
+    keystroke. A `None` cell renders as `—` (spec edge case on missing fields).
+  - `crates/devtron-tui/src/dialogs/confirm.rs`: a yes/no dialog whose default is **No**
 - [ ] T025 Implement the global keys and command bar in `crates/devtron-tui/src/app/update.rs` and
   `crates/devtron-tui/src/views/help.rs`, following contracts/keybindings.md, "Global keys":
   - `:` with `apps`, `instances`/`ctx`, `help` and `q`, with Tab completion
-  - `/`, `Enter`, `Esc` (back, or cancel a bar), `?`, `r`, `q` (back, quits on the root view),
-    `Ctrl-C` (quit)
+  - `/`, `Enter`, `Esc` (back, does nothing on the root view, cancels a bar or dialog), `?`, `r`,
+    `q` (**quits from any view**, constitution IV; it is plain text while typing in a bar or
+    dialog field), `Ctrl-C` (quit)
   - `j`/`k`/arrows/`PgDn`/`PgUp`/`g`/`G`
   - The help view lists the global keys plus the key table of the current view (each view exposes
     `fn keys() -> &'static [(&str, &str)]`).
@@ -290,11 +315,19 @@ US4 and US5, so it is built here to keep those stories independent of each other
   - Stage markers are shown inline.
 
   Depends on T011, T024 and T026.
-- [ ] T028 Create `crates/devtron-tui/tests/update.rs`, testing pure transitions:
+- [ ] T028 Create `crates/devtron-tui/tests/update.rs` and `crates/devtron-tui/tests/responsiveness.rs`.
+  In `update.rs`, testing pure transitions:
   - pushing and popping the view stack
-  - `q` on the root quits and `Esc` on the root does nothing
+  - `q` quits from a nested view and from the root; `q` typed into the filter bar is text
+  - `Esc` on the root does nothing
   - a message with an old epoch is dropped and the state doesn't change
   - `r` sets `stale` and keeps `Loaded`
+
+  In `responsiveness.rs` (FR-021, SC-004), drive `run` (T023) with a `TestBackend` and a scripted
+  event stream, against a wiremock server whose responses are delayed by 5 s:
+  - while the request is pending, `j`, `Esc` and `q` each change the rendered frame or end the
+    loop within 100 ms of being sent
+  - `q` ends the loop without waiting for the pending request
 
   Depends on T021 and T025.
 - [ ] T029 [P] Create `crates/devtron-tui/tests/snapshots.rs`: an `insta` harness on
@@ -302,8 +335,9 @@ US4 and US5, so it is built here to keep those stories independent of each other
   expired), the footer, the loadable states, the too-small screen (79×24) and the log viewer
   (following, searching, dropped lines).
 - [ ] T030 [P] Create `crates/devtron-tui/tests/token_never_rendered.rs`. It renders every widget and
-  view state available so far with the token `eyJ-canary-token-value` and asserts the canary is
-  absent from every buffer cell string and from every `ApiError` `Display` (SC-006). Each story
+  view state available so far with `Credentials::ApiToken` holding the canary
+  `eyJ-canary-token-value`, and asserts the canary is absent from every buffer cell string, every
+  `ApiError` `Display`, and the `Debug` of `Credentials` and `Session` (SC-006). Each story
   adds its views to it.
 
 **Checkpoint**: Foundation ready. The API core is tested, the fixtures are committed, and the TUI
@@ -346,26 +380,28 @@ the project and environments against the web UI (quickstart M1–M4).
   - Skip environment entries with an empty `environmentId` or `environmentName`.
   - Resolve `projectId` against `teams()`.
   - Unit tests: empty entries are skipped, and an unknown project gives `None`.
-- [ ] T036 [US1] Implement the register form `crates/devtron-tui/src/views/register.rs` (FR-001,
+- [ ] T036 [US1] Implement the register dialog `crates/devtron-tui/src/dialogs/register.rs` (FR-001,
   contracts/cli-config.md, First launch):
-  - Fields: name, URL, token file (pre-filled `~/.devtron-token`), colour (optional), validated
-    with the rules of T019.
+  - Fields: name, URL, credentials (the token file path, pre-filled `~/.devtron-token`; saved as
+    `auth = { kind = "token_file", path }`), colour (optional). All validated with the rules of
+    T019.
   - The connection is checked (A1) before saving. The first instance becomes `last_instance`.
   - Refuse a name that is already registered: "name '{name}' is already registered".
 - [ ] T037 [US1] Implement the startup flow in `crates/devtron-tui/src/main.rs` and
   `crates/devtron-tui/src/app/update.rs` (FR-002–FR-005):
-  - Choose the instance: `--instance`, else `last_instance`, else the register form.
+  - Choose the instance: `--instance`, else `last_instance`, else the register dialog.
   - An unknown `--instance` exits with code 2: "unknown instance '<name>'; registered: a, b".
-  - Resolve the token (T020), then check the connection (A1).
+  - Load the credentials (T020), then check the connection (A1).
   - `ConnectFailed{cause}` renders the contract's messages, including
-    "token for {instance} expired on {date}; replace {token_file}".
+    "credentials for {instance} expired on {date}", followed by the hint from `AuthConfig`
+    ("replace token file {path}").
   - A permission warning banner names the file, and startup continues.
 - [ ] T038 [US1] Implement the apps view `crates/devtron-tui/src/views/apps.rs` (FR-008, FR-009):
   - Columns: name, project, environments (comma-separated names).
   - `/` filter matches names case-insensitively and updates on each keystroke. `Esc` clears it.
-  - Filter and selection are kept when coming back to this view (US2, scenario 3).
-  - Loading, empty ("no applications visible with this token") and error states.
-- [ ] T039 [US1] Add snapshots to `crates/devtron-tui/tests/snapshots.rs` (register form, apps
+  - Filter and selection are kept when coming back to this view (US2, scenario 4).
+  - Loading, empty ("no applications visible with your access") and error states.
+- [ ] T039 [US1] Add snapshots to `crates/devtron-tui/tests/snapshots.rs` (register dialog, apps
   loaded, filtered, empty, error, connect-failed expired) and to
   `crates/devtron-tui/tests/token_never_rendered.rs` (register, apps, connect-failed). Add filter
   tests to `crates/devtron-tui/tests/update.rs`.
@@ -385,9 +421,9 @@ never-deployed and deletion-pending environments.
 
 ### Tests for User Story 2
 
-- [ ] T040 [P] [US2] Add fixture tests for A4 (`other-env.json`), A5 (`detail-v2.json`) and A6
-  (`resource-tree.json`: `status`, `nodes`, `podMetadata`) in
-  `crates/devtron-api/tests/models.rs`.
+- [ ] T040 [P] [US2] Add fixture tests in `crates/devtron-api/tests/models.rs` for A4 (`other-env.json`),
+  A5 (`detail-v2.json`), A6 (`resource-tree.json`: `status`, `nodes`, `podMetadata`) and A7 with the
+  minimal `Runner` (`history.json`: `id`, `cd_workflow_id`, `workflow_type`, `status`).
 - [ ] T041 [P] [US2] Add `other_env`, `app_detail` and `resource_tree` to the allowlist test in
   `crates/devtron-api/tests/allowlist.rs`. Add a wiremock test showing that an environment with
   `deploymentAppDeleteRequest: true` produces **zero** requests to `/app/detail/resource-tree`
@@ -398,28 +434,45 @@ never-deployed and deletion-pending environments.
 - [ ] T042 [P] [US2] Create the wire models `crates/devtron-api/src/models/env.rs` (`OtherEnv`,
   `DetailV2`) and `crates/devtron-api/src/models/tree.rs` (`ResourceTree { status, nodes, podMetadata }`,
   `Node { kind, name, namespace, info: Vec<InfoItem>, createdAt, health }`, `PodMetadata { name, containers }`).
+  Also create `crates/devtron-api/src/models/history.rs` with `HistoryResponse { cdWorkflows }` and
+  a minimal `Runner { id, cd_workflow_id, workflow_type, status }` (snake_case, as on the wire),
+  which the latest-outcome lookup needs. T049 extends it for the history view.
 - [ ] T043 [US2] Add client methods in `crates/devtron-api/src/client.rs`:
   - `other_env(app_id)` (A4) and `app_detail(app_id, env_id)` (A5).
   - `resource_tree(target: TreeTarget)` (A6), where `TreeTarget::new(&EnvironmentState)` returns
     `None` when a deletion is pending or the environment was never deployed. This makes the R3
     exclusion hold by type, not by care.
+  - `latest_runners(app_id, env_id)`: A7 with `offset=0&limit=3`, for the latest deployment outcome
+    (R5). Add it to the allowlist test in `crates/devtron-api/tests/allowlist.rs`.
 - [ ] T044 [US2] Create the domain types in `crates/devtron-api/src/domain/env.rs`:
   - `EnvironmentState`, with `deployed: Option<DeployedBuild>` (`None` when `lastDeployed` is empty,
     FR-011)
   - `DeployedBuild { image, tag (after last ':'), commit (commits[0], first 7 chars), deployed_at, deployed_by, runner_id }`
   - `Health = Healthy | Progressing | Degraded | Suspended | Missing | Hibernating | Unknown(String)`
+  - `RunStatus` (data-model "Deployment", parsed case-insensitively), created here because US2
+    needs it; US3 reuses it.
+  - `fn latest_outcome(runners: &[Runner]) -> Option<RunStatus>`: among the newest runners, take
+    the group of the first runner's `cd_workflow_id`. Return its DEPLOY runner's status, or else
+    that group's newest runner's status.
   - Unit tests: tag parsing with a registry port (`host:5000/img:tag`), never deployed, an unknown
-    health value.
+    health value, and `latest_outcome` for [POST ok, DEPLOY failed, PRE ok] of one deployment →
+    `Failed`.
 - [ ] T045 [US2] Implement the app detail view `crates/devtron-tui/src/views/app_detail.rs` (FR-010,
   FR-011, FR-022):
-  - Rows: environment, health, tag, commit, deployed at (relative time), deployed by.
-  - Health is loaded per row concurrently, with at most 4 in flight (`buffer_unordered(4)`).
+  - Rows: environment, health, last deployment (outcome), tag, commit, deployed at (relative
+    time), deployed by.
+  - Health (A6) and last deployment (A7, `limit=3`) are loaded per row concurrently, with at most 4
+    requests in flight across the view (`buffer_unordered(4)`). A healthy row whose last deployment
+    failed shows both (US2 scenario 3).
+  - A 403 on one row's tree or history marks only that cell "not visible with your access", and
+    the other rows render normally (FR-035).
   - Never-deployed rows show "never deployed". Deletion-pending rows show "deletion pending".
   - `r` refreshes without leaving the view. `Esc` goes back to apps with the filter kept.
   - Footer keys: `h` history, `b` builds, `p` pods. Each key shows "coming in a later story" until
     its story lands.
 - [ ] T046 [US2] Add snapshots (app detail loaded, one row loading health, never deployed, deletion
-  pending, empty "no environments configured") to `crates/devtron-tui/tests/snapshots.rs`, and the
+  pending, healthy with a failed last deployment, one row forbidden, empty "no environments
+  configured") to `crates/devtron-tui/tests/snapshots.rs`, and the
   app detail view to `crates/devtron-tui/tests/token_never_rendered.rs`.
 
 **Checkpoint**: US1 and US2 both work on their own.
@@ -436,8 +489,8 @@ the web UI (quickstart M6).
 
 ### Tests for User Story 3
 
-- [ ] T047 [P] [US3] Add a fixture test for A7 (`history.json`: snake_case fields,
-  `workflow_type`) in `crates/devtron-api/tests/models.rs`, and add `history` and
+- [ ] T047 [P] [US3] Extend the A7 fixture test (`history.json`: every snake_case field of the full
+  `Runner`) in `crates/devtron-api/tests/models.rs`, and add `history` and
   `cd_stage_logs` to the allowlist test in `crates/devtron-api/tests/allowlist.rs`.
 - [ ] T048 [P] [US3] Write the grouping tests in `crates/devtron-api/src/domain/history.rs`
   (unit):
@@ -448,9 +501,10 @@ the web UI (quickstart M6).
 
 ### Implementation for User Story 3
 
-- [ ] T049 [P] [US3] Create the wire model `crates/devtron-api/src/models/history.rs` (`HistoryResponse { cdWorkflows }`,
-  `Runner { id, cd_workflow_id, workflow_type, status, pod_status, started_on, finished_on, email_id, triggered_by, image, ... }`)
-  with snake_case names as on the wire.
+- [ ] T049 [P] [US3] Extend the wire model `crates/devtron-api/src/models/history.rs` (created
+  minimal in T042). `Runner` gains `pod_status, started_on, finished_on, email_id, triggered_by,
+  image, ...`, with snake_case names as on the wire. If US3 is built before US2, create the file
+  here instead.
 - [ ] T050 [US3] Add client methods in `crates/devtron-api/src/client.rs`:
   - `history(app_id, env_id, offset, limit = 20)` (A7), with both `filterCriteria` parameters
     (R6).
@@ -562,8 +616,10 @@ M9).
 - [ ] T066 [US5] Implement the pods view `crates/devtron-tui/src/views/pods.rs` (FR-025):
   - Columns: name, status, ready, restarts, age.
   - Empty state: "no running pods".
-  - `Enter` opens the first or only container. With several containers, a container picker
-    appears first.
+  - `Enter` opens the first or only container. With several containers, the container picker
+    dialog `crates/devtron-tui/src/dialogs/container_picker.rs` appears first.
+  - A 403 on the tree marks the view "not visible with your access". A 403 on one pod's log stream
+    only affects that log viewer (FR-035).
   - Load `app_detail` (A5) for the namespace and `deploymentAppType`.
   - Wire the `p` key in `views/app_detail.rs`.
 - [ ] T067 [US5] Extend the log viewer for pod sources in `crates/devtron-tui/src/views/logs.rs`
@@ -597,8 +653,9 @@ colour and app list change with nothing left over (quickstart M10, M11).
      apps never appear in `State`.
   2. While following an A pod log that streams one line every 100 ms, switch to B. Afterwards no
      A line is appended, and A's stream task has ended (cancellation observed).
-  3. After a switch, `DEVTRON_TOKEN` is not sent to B: B's received `token` header equals B's file
-     token.
+  3. Credentials stay with their instance: every request B receives carries B's token file
+     content, A never receives B's token, and B never receives A's token, including requests sent
+     around the switch.
 - [ ] T070 [P] [US6] Add registry tests to `crates/devtron-tui/tests/update.rs`:
   - a duplicate name is refused
   - removal asks for confirmation (default No) and leaves the token file untouched (FR-031)
@@ -608,18 +665,19 @@ colour and app list change with nothing left over (quickstart M10, M11).
 
 - [ ] T071 [US6] Implement the instances view `crates/devtron-tui/src/views/instances.rs` (FR-030,
   FR-032):
-  - Columns: name (in its colour), URL, token status (`valid until {date}` / `expired` /
-    `unreadable`, computed from the token file without network access).
-  - `a` opens the register form (T036). `d` removes after the confirm dialog, default **No**.
+  - Columns: name (in its colour), URL, credential status (`valid until {date}` / `expired` /
+    `unreadable`), computed from the instance's `auth` without network access (for a token file:
+    readable, then `exp`).
+  - `a` opens the register dialog (T036). `d` removes after the confirm dialog, default **No**.
     `Enter` switches.
   - Reachable through `:instances` and `:ctx`.
 - [ ] T072 [US6] Implement switching in `crates/devtron-tui/src/app/update.rs` and
   `crates/devtron-tui/src/session.rs` (FR-003, FR-033):
   - Cancel the old session and increment the epoch.
   - Clear every view's state and reset the stack to the new instance's apps view.
-  - Resolve the token with `is_launch_instance = false`, then check the connection (A1).
+  - Load the target's credentials from its own `auth` (T020), then check the connection (A1).
   - Save `last_instance` after a successful connection.
-  - An expired token on the target shows the US1 expired message (US6, scenario 6).
+  - Expired credentials on the target show the US1 expired message (US6, scenario 6).
 - [ ] T073 [US6] Implement the fallback at launch in `crates/devtron-tui/src/main.rs` (FR-034): when
   the last-used instance is gone from the registry or unreachable, open the instances view with
   the cause shown, instead of exiting.
@@ -671,7 +729,9 @@ colour and app list change with nothing left over (quickstart M10, M11).
     `update.rs`/snapshots with a pre-set state.
   - US3, US4 and US5 each wire one key in `views/app_detail.rs` (T052, T060, T066). If US2 isn't
     done, that one-line wiring waits, and the view is still testable directly.
-  - US6 reuses US1's register form (T036).
+  - US6 reuses US1's register dialog (T036).
+  - US2 creates the minimal A7 wire model and `RunStatus` (T042, T044) for the latest-deployment
+    column. US3 extends them (T049, T051). Whichever story comes first creates the file.
 - **Polish (Phase 9)**: after the stories it covers. T075 needs all of US1–US5.
 
 ### Within each story
