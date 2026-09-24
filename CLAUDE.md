@@ -34,6 +34,10 @@ The Devtron API token lives in `~/.devtron-token` (or a per-instance token file)
 copy it into fixtures, or pass it on a command line. Scrub tokens, emails and internal hostnames
 from every recorded response before committing it.
 
+This repository is public. Specs, plans and fixtures refer to "the reference instance" and never
+include its address, organisation name, app names or user emails. Raw recordings and the local
+deny-list live in `fixtures-raw/`, which is git-ignored.
+
 ## Commits
 
 One-line imperative subject naming the behaviour change, no body.
